@@ -51,9 +51,10 @@ data Element = Element
 
 type RenderM = Reader (Style V2 Double) [Element]
 
+instance Semigroup RenderM where
+  a <> b = mappend <$> a <*> b
 instance Monoid RenderM where
   mempty = return []
-  mappend a b = mappend <$> a <*> b
 
 type AttributeValue = String
 

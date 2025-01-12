@@ -59,7 +59,7 @@ import           Diagrams.Core.Types (Annotation (..))
 import           Diagrams.Prelude hiding (Attribute, size, view, local, text, query)
 import           Diagrams.TwoD.Adjust (adjustDia2D)
 import           Diagrams.TwoD.Text (Text(..))
-import           Miso hiding (Options, view, Result, onMouseDown, onMouseUp)
+import           Miso hiding (Options, view, Result, onMouseDown, onMouseUp, Node)
 import           Miso.String (MisoString, ms)
 
 import           Graphics.Rendering.Miso (RenderM)
@@ -78,9 +78,10 @@ type B = MisoSvg
 type instance V MisoSvg = V2
 type instance N MisoSvg = Double
 
+instance Semigroup (Render MisoSvg V2 Double) where
+  Render r1 <> Render r2_ = Render $ mappend r1 r2_
 instance Monoid (Render MisoSvg V2 Double) where
   mempty = Render mempty
-  Render r1 `mappend` Render r2_ = Render $ mappend r1 r2_
 
 instance Backend MisoSvg V2 Double where
   newtype Render  MisoSvg V2 Double = Render RenderM

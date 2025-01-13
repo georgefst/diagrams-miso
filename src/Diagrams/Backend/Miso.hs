@@ -19,6 +19,8 @@
 {-# LANGUAGE UndecidableInstances       #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
   -- UndecidableInstances needed for ghc < 707
 
 ----------------------------------------------------------------------------
@@ -46,6 +48,7 @@ module Diagrams.Backend.Miso
   , onMouseUp'
   , onMouseMove
   , onMouseMove'
+  , htmlDiagram
   ) where
 
 import           Control.Lens hiding (children, transform, ( # ))
@@ -56,14 +59,17 @@ import qualified Data.Map as M
 import           Data.Tree
 import           Diagrams.Core.Compile
 import           Diagrams.Core.Types (Annotation (..))
-import           Diagrams.Prelude hiding (Attribute, size, view, local, text, query)
+import           Diagrams.Prelude hiding (height, width, Attribute, size, view, local, text, query)
 import           Diagrams.TwoD.Adjust (adjustDia2D)
 import           Diagrams.TwoD.Text (Text(..))
-import           Miso hiding (Options, view, Result, onMouseDown, onMouseUp, Node)
+import           Miso hiding (P, Options, view, Result, onMouseDown, onMouseUp, Node)
 import           Miso.String (MisoString, ms)
 
-import           Graphics.Rendering.Miso (RenderM)
+import           Graphics.Rendering.Miso (RenderM, renderForeign, renderForeignCustom, mkTransformMatrix)
 import qualified Graphics.Rendering.Miso as R
+import Data.Typeable (Typeable)
+import Data.Void (Void, absurd)
+import Miso.Svg (foreignObject_, transform_)
 
 nodeSvg_ :: MisoString -> [Attribute action] -> [View action] -> View action
 nodeSvg_ = flip (node SVG) Nothing
@@ -124,6 +130,22 @@ mkWidget :: Element act -> View act
 mkWidget (Element name attrs children) =
   nodeSvg_ (ms name) attrs (map mkWidget children)
 mkWidget (SvgText str) = text (ms str)
+mkWidget (SvgHtml size@(V2 width height) as t h) =
+    foreignObject_
+        ( [ width_ $ ms width
+          , height_ $ ms height
+          , transform_ $ ms $ R.mkTransformMatrix $ t
+            <> reflectionY
+            <> translation ((fromIntegral <$> size) / (-2))
+          -- TODO we could use this instead of doing translation via the matrix...
+          -- any actual advantage?
+          -- , x_ $ ms x
+          -- , y_ $ ms y
+          ]
+            <> (fmap absurd <$> as)
+        )
+        [absurd <$> h]
+mkWidget (CustomElement v) = absurd <$> v
 
 unRender :: Render MisoSvg V2 Double -> RenderM
 unRender (Render els) = els
@@ -133,6 +155,75 @@ instance Renderable (Path V2 Double) MisoSvg where
 
 instance Renderable (Text Double) MisoSvg where
   render _ = Render . R.renderText
+
+instance Transformable HTMLPrimitive where
+  -- TODO basically copied from `Text` instance...
+  transform t p@HTMLPrimitive{transformation = tt} = p{transformation = t <> tt <> t'}
+    where
+      t' = scaling (1 / avgScale t)
+instance Renderable HTMLPrimitive MisoSvg where
+  render _ HTMLPrimitive{size, attrs, transformation, html} =
+    Render $ renderForeign size attrs transformation html
+data HTMLPrimitive = HTMLPrimitive
+  { size :: V2 Word
+  , attrs :: [Attribute Void]
+  , transformation :: T2 Double
+  , html :: View Void
+  }
+  deriving Typeable
+type instance V HTMLPrimitive = V2
+type instance N HTMLPrimitive = Double
+
+data CustomPrimitive = CustomPrimitive
+  { viewer :: [T2 Double] -> [Attribute Void] -> View Void
+  , transforms :: [T2 Double]
+  }
+  deriving Typeable
+instance Transformable CustomPrimitive where
+  transform t p@CustomPrimitive{transforms = tt} = p{transforms = tt <> [t]}
+instance Renderable CustomPrimitive MisoSvg where
+  render _ (CustomPrimitive viewer transforms) = Render $ renderForeignCustom $ viewer transforms
+type instance V CustomPrimitive = V2
+type instance N CustomPrimitive = Double
+
+htmlDiagram :: V2 Word -> [Attribute Void] -> View Void -> Diagram B
+htmlDiagram size@(V2 width height) attrs html =
+    -- TODO for some reason, despite `HTMLPrimitive` being reimplemented based on this `CustomPrimitive` stuff
+    -- (which was originally just a way to experiment quickly downstream without recompiling this library),
+    -- this version doesn't respond properly to transformations, e.g. `scale 0.5`
+    -- and in Monpad, it doesn't work properly when we don't have `windowSize = V2 2000 1000`
+    -- mkQD (Prim HTMLPrimitive{transformation = mempty, ..}) (getEnvelope r) (getTrace r) mempty mempty
+    mkQD
+        ( Prim
+            CustomPrimitive
+                { transforms = mempty
+                , viewer = \ts as ->
+                    foreignObject_
+                        ( [ width_ $ ms width
+                          , height_ $ ms height
+                          , transform_
+                                . ms
+                                . mkTransformMatrix
+                                $ foldl
+                                    (\t tt -> t <> tt <> scaling (1 / avgScale t))
+                                    mempty
+                                    ts
+                                    <> reflectionY
+                                    <> translation ((fromIntegral <$> size) / (-2))
+                          ]
+                            <> as
+                            <> attrs
+                        )
+                        [absurd <$> html]
+                }
+        )
+        (getEnvelope r)
+        (getTrace r)
+        mempty
+        mempty
+  where
+    -- TODO specify trace and envelope directly instead
+    r :: Diagram B = rect (fromIntegral width) (fromIntegral height)
 
 instance Default (Options MisoSvg V2 Double) where
   def = MisoOptions absolute mempty
@@ -202,8 +293,17 @@ data Element action
             [Attribute action]
             [Element action]
   | SvgText String
+  | SvgHtml
+    (V2 Word)
+    [Attribute Void]
+    (T2 Double)
+    (View Void)
+  | CustomElement
+    (View Void)
 
 toMisoElement :: R.Element -> Element action
 toMisoElement (R.Element name attrs children) =
   Element name (toMisoAttrs attrs) (map toMisoElement children)
 toMisoElement (R.SvgText t) = SvgText t
+toMisoElement (R.SvgHtml v attrs attrs' t h) = SvgHtml v (attrs <> toMisoAttrs attrs') t h
+toMisoElement (R.CustomElement v) = CustomElement $ v toMisoAttrs

@@ -27,9 +27,12 @@ module Graphics.Rendering.Miso
     , Attrs
     , renderPath
     , renderText
+    , renderForeign
+    , renderForeignCustom
     , renderStyles
     , renderMiterLimit
     , getNumAttr
+    , mkTransformMatrix
     ) where
 
 import           Control.Monad.Reader as R
@@ -37,17 +40,27 @@ import           Data.List (intercalate)
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Diagrams.Core.Transform (matrixHomRep)
-import           Diagrams.Prelude hiding (Attribute, Render, with, text)
+import           Diagrams.Prelude hiding (size, Attribute, Render, with, text)
 import           Diagrams.TwoD.Path (getFillRule)
 import           Diagrams.TwoD.Text
 import           GHC.Generics (Generic)
+import Data.Void (Void)
+import Miso (View)
+import Miso.Html (Attribute)
 
 data Element = Element
                String
                (Map String String)
                [Element]
   | SvgText String
-  deriving (Eq, Show, Generic)
+  | SvgHtml
+    (V2 Word)
+    [Attribute Void]
+    Attrs
+    (T2 Double)
+    (View Void)
+  | CustomElement -- TODO remove this - was just useful for testing
+    ((Map String String -> [Attribute Void]) -> View Void)
 
 type RenderM = Reader (Style V2 Double) [Element]
 
@@ -119,8 +132,24 @@ renderText (Text tt tAlign str) = do
        w' | w' >= 0.75 -> "end"
        _ -> "middle"
    t                   = tt <> reflectionY
-   [[a,b],[c,d],[e,f]] = matrixHomRep t
-   transformMatrix     = matrix a b c d e f
+   transformMatrix = mkTransformMatrix t
+
+mkTransformMatrix ::
+    (Additive v, Traversable v, Show a, RealFloat a) =>
+    Transformation v a -> String
+mkTransformMatrix t =
+  let [[a, b], [c, d], [e, f]] = matrixHomRep t
+   in matrix a b c d e f
+
+renderForeign :: V2 Word -> [Attribute Void] -> T2 Double -> View Void -> RenderM
+renderForeign size attrs transformation html = do
+  attrs' <- renderStyles <$> ask
+  pure [SvgHtml size attrs attrs' transformation html]
+
+renderForeignCustom :: ([Attribute Void] -> View Void) -> RenderM
+renderForeignCustom v = do
+  attrs <- renderStyles <$> ask
+  pure [CustomElement $ \f -> v (f attrs)]
 
 -- | Specifies a transform in the form of a transformation matrix
 matrix :: (Show a, RealFloat a) =>  a -> a -> a -> a -> a -> a -> String

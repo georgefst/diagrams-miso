@@ -1,2 +1,28 @@
 packages: ./.
-          ./example
+
+if arch(javascript)
+  packages: ./example
+
+if arch(wasm32)
+  -- older versions of `time` don't build on WASM
+  -- https://github.com/haskellari/time-compat/issues/37
+  constraints: time installed
+  allow-newer: time
+
+  -- waiting for release
+  -- https://github.com/dmjio/miso/pull/752
+  source-repository-package
+    type: git
+    location: https://github.com/dmjio/miso
+    tag: e411f3e2872465f37eb53b6de4542010a105b53a
+
+  -- Wasm support
+  https://github.com/diagrams/diagrams-lib/pull/372
+  source-repository-package
+    type: git
+    location: https://github.com/georgefst/diagrams-lib
+    tag: 19d9ebeb22385a7674ea7bec6856dc130b73350f
+
+  -- default global Wasm config adds `:override` for `head.hackage` - often not what we want
+  -- https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/issues/9#note_553150
+  active-repositories: hackage.haskell.org, head.hackage.ghc.haskell.org

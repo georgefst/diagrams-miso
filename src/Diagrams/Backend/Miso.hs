@@ -49,6 +49,8 @@ module Diagrams.Backend.Miso
   , onMouseMove
   , onMouseMove'
   , htmlDiagram
+  , DiaAttr(..)
+  , mkDiaAttr
   ) where
 
 import           Control.Lens hiding (children, transform, ( # ))
@@ -234,26 +236,43 @@ mouseEventDecoder =
     (withObject "event" $ \o -> liftA2 (,) (o .: "clientX") (o .: "clientY"))
     (DecodeTarget [])
 
-query :: Monoid a => MisoString -> (a -> action) -> DiaAttr a action
-query event f =
+mkDiaAttr ::
+  (Monoid a) =>
+  MisoString ->
+  Decoder e ->
+  (e -> P2 Double) ->
+  (e -> a -> action) ->
+  DiaAttr a action
+mkDiaAttr event eventDecoder getPoint f =
   DiaAttr
     (\dia t ->
        on
          event
-         mouseEventDecoder
-         (f . sample dia . transform (inv t) . fmap fromIntegral . p2))
+         eventDecoder
+         (\e -> f e $ sample dia $ transform (inv t) $ getPoint e)
+    )
+
+query :: Monoid a => MisoString -> (a -> action) -> DiaAttr a action
+query event f =
+  mkDiaAttr
+    event
+    mouseEventDecoder
+    (fmap fromIntegral . p2)
+    (\_ ann -> f ann)
 
 pos :: MisoString -> (P2 Double -> action) -> DiaAttr a action
-pos event f =
-  DiaAttr
-    (\_dia t ->
-       on
-         event
-         mouseEventDecoder
-         (f . transform (inv t) . fmap fromIntegral . p2))
+pos event f = contramapDiaAttrAnn (const ()) $
+  mkDiaAttr
+    event
+    mouseEventDecoder
+    c
+    (\e _ -> f $ c e)
+  where c = fmap fromIntegral . p2
 
 data DiaAttr a action =
   DiaAttr (QDiagram MisoSvg V2 Double a -> Transformation V2 Double -> Attribute action)
+contramapDiaAttrAnn :: (b -> a) -> DiaAttr a action -> DiaAttr b action
+contramapDiaAttrAnn f (DiaAttr x) = DiaAttr $ \d -> x $ f <$> d
 
 onMouseDown :: (P2 Double -> action) -> DiaAttr a action
 onMouseDown = pos "mousedown"
